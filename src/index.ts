@@ -3,7 +3,6 @@ import { EventEmitter } from 'events';
 import * as Koa from 'koa';
 import * as Router from 'koa-router';
 import * as bodyParser from 'koa-bodyparser';
-import * as request from 'request';
 import * as crypto from 'crypto';
 import type { EventPayloadMap } from '@octokit/webhooks/dist-types/generated/webhook-identifiers';
 
@@ -19,15 +18,23 @@ class WebhookEventEmitter extends EventEmitter {
 const handler = new WebhookEventEmitter();
 
 const post = async (text: string, home = true) => {
-	request.post(config.instance + '/api/notes/create', {
-		json: {
+	const instance = config.instance.endsWith('/')
+		? config.instance.substring(0, config.instance.length - 1)
+		: config.instance;
+
+	await fetch(`${instance}/api/notes/create`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+		},
+		body: JSON.stringify({
 			i: config.i,
 			text,
 			visibility: home ? 'home' : 'public',
 			noExtractMentions: true,
-			noExtractHashtags: true
-		}
-	});
+			noExtractHashtags: true,
+		}),
+	})
 };
 
 const app = new Koa();
@@ -66,7 +73,7 @@ const server = http.createServer(app.callback());
 
 server.listen(config.port);
 
-handler.on('status', event => {
+handler.on('status', async event => {
 	const state = event.state;
 	switch (state) {
 		case 'error':
@@ -75,26 +82,24 @@ handler.on('status', event => {
 			const parent = commit.parents[0];
 
 			// Fetch parent status
-			request({
-				url: `${parent.url}/statuses`,
-				proxy: config.proxy,
+			await fetch(`${parent.url}/statuses`, {
+				method: "GET",
 				headers: {
 					'User-Agent': 'misskey'
-				}
-			}, (err, res, body) => {
-				if (err) {
-					console.error(err);
-					return;
-				}
-				const parentStatuses = JSON.parse(body);
+				},
+			}).then(async res => {
+				const parentStatuses = await res.json()
 				const parentState = parentStatuses[0]?.state;
 				const stillFailed = parentState === 'failure' || parentState === 'error';
 				if (stillFailed) {
-					post(`⚠️ **BUILD STILL FAILED** ⚠️: ?[${commit.commit.message}](${commit.html_url})`);
+					await post(`⚠️ **BUILD STILL FAILED** ⚠️: ?[${commit.commit.message}](${commit.html_url})`);
 				} else {
-					post(`🚨 **BUILD FAILED** 🚨: → ?[${commit.commit.message}](${commit.html_url}) ←`);
+					await post(`🚨 **BUILD FAILED** 🚨: → ?[${commit.commit.message}](${commit.html_url}) ←`);
 				}
-			});
+			}).catch(err => {
+				console.error(err);
+			})
+
 			break;
 	}
 });
