@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
+import { EventEmitter } from "node:events";
+import * as http from "node:http";
 import type { EventPayloadMap } from "@octokit/webhooks/dist-types/generated/webhook-identifiers";
-import { EventEmitter } from "events";
-import * as http from "http";
 import * as Koa from "koa";
 import * as bodyParser from "koa-bodyparser";
 import * as Router from "koa-router";
@@ -13,7 +13,7 @@ class WebhookEventEmitter extends EventEmitter {
 		event: T,
 		listener: (payload: EventPayloadMap[T]) => void,
 	): this;
-	on(event: string | symbol, listener: (...args: any[]) => void): this {
+	on(event: string | symbol, listener: (...args: unknown[]) => void): this {
 		return super.on(event, listener);
 	}
 }
@@ -121,7 +121,7 @@ handler.on("push", (event) => {
 		case "refs/heads/develop": {
 			const pusher = event.pusher;
 			const compare = event.compare;
-			const commits: any[] = event.commits;
+			const commits: EventPayloadMap["push"]["commits"] = event.commits;
 			post(
 				[
 					`🆕 Pushed by **${pusher.name}** with ?[${commits.length} commit${commits.length > 1 ? "s" : ""}](${compare}):`,
