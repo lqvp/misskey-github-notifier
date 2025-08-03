@@ -12,11 +12,34 @@ type Env = {
 class WebhookEventEmitter extends EventEmitter {
 	on<T extends keyof EventPayloadMap>(
 		event: T,
-		listener: (payload: EventPayloadMap[T], env: Env) => void,
+		listener: (payload: EventPayloadMap[T], env: Env) => Promise<void> | void,
 	): this;
-	// biome-ignore lint/suspicious/noExplicitAny: This is required to override the EventEmitter's on method.
-	on(event: string | symbol, listener: (payload: any, env: Env) => void): this {
+	on(
+		event: string | symbol,
+		// biome-ignore lint/suspicious/noExplicitAny: This is required to override the EventEmitter's on method.
+		listener: (payload: any, env: Env) => Promise<void> | void,
+	): this {
 		return super.on(event, listener);
+	}
+
+	async emitAndAwait(
+		event: string | symbol,
+		// biome-ignore lint/suspicious/noExplicitAny: This is required for event emitter.
+		...args: any[]
+	): Promise<void> {
+		const listeners = this.listeners(event);
+		const promises = listeners.map((listener) => {
+			try {
+				const result = listener(...args);
+				if (result && typeof result.then === "function") {
+					return result;
+				}
+			} catch (error) {
+				console.error(`Error in event listener for '${String(event)}':`, error);
+			}
+			return Promise.resolve();
+		});
+		await Promise.all(promises);
 	}
 }
 
@@ -27,7 +50,7 @@ const post = async (text: string, env: Env) => {
 		? env.MISSKEY_HOST.substring(0, env.MISSKEY_HOST.length - 1)
 		: env.MISSKEY_HOST;
 
-	await fetch(`${instance}/api/notes/create`, {
+	const res = await fetch(`${instance}/api/notes/create`, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
@@ -40,6 +63,10 @@ const post = async (text: string, env: Env) => {
 			noExtractHashtags: true,
 		}),
 	});
+
+	if (!res.ok) {
+		console.error(await res.text());
+	}
 };
 
 export default {
@@ -82,11 +109,7 @@ export default {
 		}
 
 		const ghHeader = request.headers.get("x-github-event") as string;
-		ctx.waitUntil(
-			(async () => {
-				handler.emit(ghHeader, JSON.parse(body), env);
-			})(),
-		);
+		ctx.waitUntil(handler.emitAndAwait(ghHeader, JSON.parse(body), env));
 
 		return new Response(null, { status: 204 });
 	},
@@ -137,14 +160,14 @@ handler.on("status", async (event, env) => {
 	}
 });
 
-handler.on("push", (event, env) => {
+handler.on("push", async (event, env) => {
 	const ref = event.ref;
 	switch (ref) {
 		case "refs/heads/develop": {
 			const pusher = event.pusher;
 			const compare = event.compare;
 			const commits: EventPayloadMap["push"]["commits"] = event.commits;
-			post(
+			await post(
 				[
 					`🆕 Pushed by **${pusher.name}** with ?[${commits.length} commit${commits.length > 1 ? "s" : ""}](${compare}):`,
 					commits
@@ -162,7 +185,7 @@ handler.on("push", (event, env) => {
 	}
 });
 
-handler.on("issues", (event, env) => {
+handler.on("issues", async (event, env) => {
 	const issue = event.issue;
 	let title: string;
 	switch (event.action) {
@@ -178,10 +201,13 @@ handler.on("issues", (event, env) => {
 		default:
 			return;
 	}
-	post(`${title}: #${issue.number} "${issue.title}"\n${issue.html_url}`, env);
+	await post(
+		`${title}: #${issue.number} "${issue.title}"\n${issue.html_url}`,
+		env,
+	);
 });
 
-handler.on("issue_comment", (event, env) => {
+handler.on("issue_comment", async (event, env) => {
 	const issue = event.issue;
 	const comment = event.comment;
 	let text: string;
@@ -192,10 +218,10 @@ handler.on("issue_comment", (event, env) => {
 		default:
 			return;
 	}
-	post(text, env);
+	await post(text, env);
 });
 
-handler.on("release", (event, env) => {
+handler.on("release", async (event, env) => {
 	const release = event.release;
 	let text: string;
 	switch (event.action) {
@@ -205,24 +231,27 @@ handler.on("release", (event, env) => {
 		default:
 			return;
 	}
-	post(text, env);
+	await post(text, env);
 });
 
-handler.on("watch", (event, env) => {
+handler.on("watch", async (event, env) => {
 	const sender = event.sender;
-	post(`$[spin ⭐️] Starred by ?[**${sender.login}**](${sender.html_url})`, env);
+	await post(
+		`$[spin ⭐️] Starred by ?[**${sender.login}**](${sender.html_url})`,
+		env,
+	);
 });
 
-handler.on("fork", (event, env) => {
+handler.on("fork", async (event, env) => {
 	const sender = event.sender;
 	const repo = event.forkee;
-	post(
+	await post(
 		`$[spin.y 🍴] ?[Forked](${repo.html_url}) by ?[**${sender.login}**](${sender.html_url})`,
 		env,
 	);
 });
 
-handler.on("pull_request", (event, env) => {
+handler.on("pull_request", async (event, env) => {
 	const pr = event.pull_request;
 	let text: string;
 	switch (event.action) {
@@ -243,10 +272,10 @@ handler.on("pull_request", (event, env) => {
 		default:
 			return;
 	}
-	post(text, env);
+	await post(text, env);
 });
 
-handler.on("pull_request_review_comment", (event, env) => {
+handler.on("pull_request_review_comment", async (event, env) => {
 	const pr = event.pull_request;
 	const comment = event.comment;
 	let text: string;
@@ -257,10 +286,10 @@ handler.on("pull_request_review_comment", (event, env) => {
 		default:
 			return;
 	}
-	post(text, env);
+	await post(text, env);
 });
 
-handler.on("pull_request_review", (event, env) => {
+handler.on("pull_request_review", async (event, env) => {
 	const pr = event.pull_request;
 	const review = event.review;
 	if (
@@ -278,10 +307,10 @@ handler.on("pull_request_review", (event, env) => {
 		default:
 			return;
 	}
-	post(text, env);
+	await post(text, env);
 });
 
-handler.on("discussion", (event, env) => {
+handler.on("discussion", async (event, env) => {
 	const discussion = event.discussion;
 	let title: string;
 	let url: string;
@@ -309,10 +338,13 @@ handler.on("discussion", (event, env) => {
 		default:
 			return;
 	}
-	post(`${title}: #${discussion.number} "${discussion.title}"\n${url}`, env);
+	await post(
+		`${title}: #${discussion.number} "${discussion.title}"\n${url}`,
+		env,
+	);
 });
 
-handler.on("discussion_comment", (event, env) => {
+handler.on("discussion_comment", async (event, env) => {
 	const discussion = event.discussion;
 	const comment = event.comment;
 	let text: string;
@@ -323,7 +355,7 @@ handler.on("discussion_comment", (event, env) => {
 		default:
 			return;
 	}
-	post(text, env);
+	await post(text, env);
 });
 
 function hexToBuf(hex: string): ArrayBuffer {
