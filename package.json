@@ -7,11 +7,11 @@
 		"deploy": "wrangler deploy"
 	},
 	"dependencies": {
-		"@types/koa": "2.11.6",
+		"@types/koa": "2.15.0",
 		"@types/koa-bodyparser": "5.0.2",
 		"@types/koa-router": "7.4.8",
 		"@types/request": "2.48.5",
-		"koa": "2.13.0",
+		"koa": "2.16.2",
 		"koa-bodyparser": "4.3.0",
 		"koa-router": "14.0.0",
 		"ts-node": "10.9.2",
