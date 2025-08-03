@@ -2,3 +2,6 @@ name = "misskey-github-notifier"
 main = "built/index.js"
 compatibility_date = "2025-08-03"
 compatibility_flags = ["nodejs_compat"]
+
+[observability.logs]
+enabled = true
