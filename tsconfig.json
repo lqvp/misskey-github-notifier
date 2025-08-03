@@ -10,11 +10,15 @@
 		"sourceMap": false,
 		"resolveJsonModule": true,
 		"target": "esnext",
-		"module": "commonjs",
+		"module": "esnext",
+		"moduleResolution": "node",
 		"removeComments": false,
 		"noLib": false,
+		"rootDir": "src",
 		"outDir": "built",
-		"rootDir": "src"
+		"types": ["@cloudflare/workers-types", "node"],
+		"lib": ["esnext", "webworker"],
+		"skipLibCheck": true
 	},
 	"compileOnSave": false,
 	"include": ["./src/**/*.ts"]

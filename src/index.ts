@@ -1,29 +1,31 @@
-import * as crypto from "node:crypto";
+import { Buffer } from "node:buffer";
 import { EventEmitter } from "node:events";
-import * as http from "node:http";
 import type { EventPayloadMap } from "@octokit/webhooks/dist-types/generated/webhook-identifiers";
-import * as Koa from "koa";
-import * as bodyParser from "koa-bodyparser";
-import * as Router from "koa-router";
 
-const config = require("../config.json");
+type Env = {
+	WEBHOOK_SECRET: string;
+	MISSKEY_HOST: string;
+	MISSKEY_TOKEN: string;
+	MISSKEY_VISIBILITY: "home" | "public" | "followers";
+};
 
 class WebhookEventEmitter extends EventEmitter {
 	on<T extends keyof EventPayloadMap>(
 		event: T,
-		listener: (payload: EventPayloadMap[T]) => void,
+		listener: (payload: EventPayloadMap[T], env: Env) => void,
 	): this;
-	on(event: string | symbol, listener: (...args: unknown[]) => void): this {
+	// biome-ignore lint/suspicious/noExplicitAny: This is required to override the EventEmitter's on method.
+	on(event: string | symbol, listener: (payload: any, env: Env) => void): this {
 		return super.on(event, listener);
 	}
 }
 
 const handler = new WebhookEventEmitter();
 
-const post = async (text: string) => {
-	const instance = config.instance.endsWith("/")
-		? config.instance.substring(0, config.instance.length - 1)
-		: config.instance;
+const post = async (text: string, env: Env) => {
+	const instance = env.MISSKEY_HOST.endsWith("/")
+		? env.MISSKEY_HOST.substring(0, env.MISSKEY_HOST.length - 1)
+		: env.MISSKEY_HOST;
 
 	await fetch(`${instance}/api/notes/create`, {
 		method: "POST",
@@ -31,52 +33,70 @@ const post = async (text: string) => {
 			"Content-Type": "application/json",
 		},
 		body: JSON.stringify({
-			i: config.i,
+			i: env.MISSKEY_TOKEN,
 			text,
-			visibility: config.visibility ? config.visibility : "home",
+			visibility: env.MISSKEY_VISIBILITY,
 			noExtractMentions: true,
 			noExtractHashtags: true,
 		}),
 	});
 };
 
-const app = new Koa();
-app.use(bodyParser());
+export default {
+	async fetch(
+		request: Request,
+		env: Env,
+		ctx: ExecutionContext,
+	): Promise<Response> {
+		if (request.method !== "POST") {
+			return new Response("Not Found", { status: 404 });
+		}
 
-const secret = config.hookSecret;
+		if (request.headers.get("x-github-event") === "ping") {
+			return new Response("pong", { status: 200 });
+		}
 
-const router = new Router();
+		const sigHeader = request.headers.get("x-hub-signature-256");
+		if (!sigHeader) {
+			return new Response("Bad Request", { status: 400 });
+		}
 
-router.post("/github", (ctx) => {
-	const sigHeader = ctx.headers["x-hub-signature"] as string;
-	if (!sigHeader) {
-		ctx.status = 400;
-		return;
-	}
+		const body = await request.text();
+		const encoder = new TextEncoder();
+		const key = await crypto.subtle.importKey(
+			"raw",
+			encoder.encode(env.WEBHOOK_SECRET),
+			{ name: "HMAC", hash: "SHA-256" },
+			false,
+			["verify"],
+		);
+		const signature = await crypto.subtle.verify(
+			"HMAC",
+			key,
+			hexToBuf(sigHeader.split("=")[1]),
+			encoder.encode(body),
+		);
 
-	const body = JSON.stringify(ctx.request.body);
-	const hash = crypto.createHmac("sha1", secret).update(body).digest("hex");
+		if (!signature) {
+			return new Response("Forbidden", { status: 403 });
+		}
 
-	const sig1 = Buffer.from(sigHeader);
-	const sig2 = Buffer.from(`sha1=${hash}`);
+		const ghHeader = request.headers.get("x-github-event") as string;
+		ctx.waitUntil(
+			(async () => {
+				handler.emit(ghHeader, JSON.parse(body), env);
+			})(),
+		);
 
-	// シグネチャ比較
-	if (sig1.length === sig2.length && crypto.timingSafeEqual(sig1, sig2)) {
-		const ghHeader = ctx.headers["x-github-event"] as string;
-		handler.emit(ghHeader, ctx.request.body);
-		ctx.status = 204;
-	} else {
-		ctx.status = 400;
-	}
-});
+		return new Response(null, { status: 204 });
+	},
+};
 
-app.use(router.routes());
+type Status = {
+	state: "error" | "failure" | "pending" | "success";
+};
 
-const server = http.createServer(app.callback());
-
-server.listen(config.port);
-
-handler.on("status", async (event) => {
+handler.on("status", async (event, env) => {
 	const state = event.state;
 	switch (state) {
 		case "error":
@@ -88,21 +108,23 @@ handler.on("status", async (event) => {
 			await fetch(`${parent.url}/statuses`, {
 				method: "GET",
 				headers: {
-					"User-Agent": "misskey",
+					"User-Agent": "misskey-github-notifier",
 				},
 			})
 				.then(async (res) => {
-					const parentStatuses = await res.json();
+					const parentStatuses = (await res.json()) as Status[];
 					const parentState = parentStatuses[0]?.state;
 					const stillFailed =
 						parentState === "failure" || parentState === "error";
 					if (stillFailed) {
 						await post(
 							`⚠️ **BUILD STILL FAILED** ⚠️: ?[${commit.commit.message}](${commit.html_url})`,
+							env,
 						);
 					} else {
 						await post(
 							`🚨 **BUILD FAILED** 🚨: → ?[${commit.commit.message}](${commit.html_url}) ←`,
+							env,
 						);
 					}
 				})
@@ -115,7 +137,7 @@ handler.on("status", async (event) => {
 	}
 });
 
-handler.on("push", (event) => {
+handler.on("push", (event, env) => {
 	const ref = event.ref;
 	switch (ref) {
 		case "refs/heads/develop": {
@@ -133,13 +155,14 @@ handler.on("push", (event) => {
 						)
 						.join("\n"),
 				].join("\n"),
+				env,
 			);
 			break;
 		}
 	}
 });
 
-handler.on("issues", (event) => {
+handler.on("issues", (event, env) => {
 	const issue = event.issue;
 	let title: string;
 	switch (event.action) {
@@ -155,10 +178,10 @@ handler.on("issues", (event) => {
 		default:
 			return;
 	}
-	post(`${title}: #${issue.number} "${issue.title}"\n${issue.html_url}`);
+	post(`${title}: #${issue.number} "${issue.title}"\n${issue.html_url}`, env);
 });
 
-handler.on("issue_comment", (event) => {
+handler.on("issue_comment", (event, env) => {
 	const issue = event.issue;
 	const comment = event.comment;
 	let text: string;
@@ -169,10 +192,10 @@ handler.on("issue_comment", (event) => {
 		default:
 			return;
 	}
-	post(text);
+	post(text, env);
 });
 
-handler.on("release", (event) => {
+handler.on("release", (event, env) => {
 	const release = event.release;
 	let text: string;
 	switch (event.action) {
@@ -182,23 +205,24 @@ handler.on("release", (event) => {
 		default:
 			return;
 	}
-	post(text);
+	post(text, env);
 });
 
-handler.on("watch", (event) => {
+handler.on("watch", (event, env) => {
 	const sender = event.sender;
-	post(`$[spin ⭐️] Starred by ?[**${sender.login}**](${sender.html_url})`);
+	post(`$[spin ⭐️] Starred by ?[**${sender.login}**](${sender.html_url})`, env);
 });
 
-handler.on("fork", (event) => {
+handler.on("fork", (event, env) => {
 	const sender = event.sender;
 	const repo = event.forkee;
 	post(
 		`$[spin.y 🍴] ?[Forked](${repo.html_url}) by ?[**${sender.login}**](${sender.html_url})`,
+		env,
 	);
 });
 
-handler.on("pull_request", (event) => {
+handler.on("pull_request", (event, env) => {
 	const pr = event.pull_request;
 	let text: string;
 	switch (event.action) {
@@ -219,10 +243,10 @@ handler.on("pull_request", (event) => {
 		default:
 			return;
 	}
-	post(text);
+	post(text, env);
 });
 
-handler.on("pull_request_review_comment", (event) => {
+handler.on("pull_request_review_comment", (event, env) => {
 	const pr = event.pull_request;
 	const comment = event.comment;
 	let text: string;
@@ -233,10 +257,10 @@ handler.on("pull_request_review_comment", (event) => {
 		default:
 			return;
 	}
-	post(text);
+	post(text, env);
 });
 
-handler.on("pull_request_review", (event) => {
+handler.on("pull_request_review", (event, env) => {
 	const pr = event.pull_request;
 	const review = event.review;
 	if (
@@ -254,10 +278,10 @@ handler.on("pull_request_review", (event) => {
 		default:
 			return;
 	}
-	post(text);
+	post(text, env);
 });
 
-handler.on("discussion", (event) => {
+handler.on("discussion", (event, env) => {
 	const discussion = event.discussion;
 	let title: string;
 	let url: string;
@@ -285,10 +309,10 @@ handler.on("discussion", (event) => {
 		default:
 			return;
 	}
-	post(`${title}: #${discussion.number} "${discussion.title}"\n${url}`);
+	post(`${title}: #${discussion.number} "${discussion.title}"\n${url}`, env);
 });
 
-handler.on("discussion_comment", (event) => {
+handler.on("discussion_comment", (event, env) => {
 	const discussion = event.discussion;
 	const comment = event.comment;
 	let text: string;
@@ -299,7 +323,9 @@ handler.on("discussion_comment", (event) => {
 		default:
 			return;
 	}
-	post(text);
+	post(text, env);
 });
 
-console.log("🚀 Ready! 🚀");
+function hexToBuf(hex: string): ArrayBuffer {
+	return Buffer.from(hex, "hex").buffer;
+}
