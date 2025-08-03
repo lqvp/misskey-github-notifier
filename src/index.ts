@@ -187,10 +187,7 @@ handler.on("release", (event) => {
 
 handler.on("watch", (event) => {
 	const sender = event.sender;
-	post(
-		`$[spin ⭐️] Starred by ?[**${sender.login}**](${sender.html_url})`,
-		false,
-	);
+	post(`$[spin ⭐️] Starred by ?[**${sender.login}**](${sender.html_url})`);
 });
 
 handler.on("fork", (event) => {
