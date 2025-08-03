@@ -10,7 +10,7 @@
 		"@types/koa": "2.11.6",
 		"@types/koa-bodyparser": "5.0.2",
 		"@types/koa-router": "7.4.8",
-		"@types/request": "2.48.5",
+		"@types/request": "2.48.13",
 		"koa": "2.13.0",
 		"koa-bodyparser": "4.3.0",
 		"koa-router": "10.0.0",
