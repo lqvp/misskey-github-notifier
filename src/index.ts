@@ -281,27 +281,6 @@ const buildPackageNotification = (info: {
 		.join("\n");
 };
 
-handler.on("package", async (event, env) => {
-	const pkg = event.package;
-	if (pkg.package_type !== "container") return;
-	const version = pkg.package_version;
-	const tags = extractContainerTags(version?.docker_metadata);
-	if (!tags.includes("latest")) return;
-
-	await post(
-		buildPackageNotification({
-			packageName: pkg.name,
-			repositoryName: event.repository?.full_name ?? pkg.namespace,
-			versionName: version?.name ?? version?.version,
-			action: event.action,
-			actor: version?.author?.login ?? event.sender?.login,
-			tags,
-			url: version?.html_url ?? event.repository?.html_url,
-		}),
-		env,
-	);
-});
-
 handler.on("registry_package", async (event, env) => {
 	const pkg = event.registry_package;
 	if (pkg.package_type !== "container") return;
