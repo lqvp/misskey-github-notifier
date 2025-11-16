@@ -251,6 +251,78 @@ handler.on("fork", async (event, env) => {
 	);
 });
 
+const extractContainerTags = (
+	metadata?: ({ tags?: string[] } | null)[] | null,
+) => {
+	const tags = metadata?.flatMap((entry) => entry?.tags ?? []) ?? [];
+	return tags.filter((tag): tag is string => Boolean(tag && tag.trim().length));
+};
+
+const buildPackageNotification = (info: {
+	packageName: string;
+	repositoryName?: string;
+	versionName?: string;
+	action: string;
+	actor?: string;
+	tags: string[];
+	url?: string;
+}) => {
+	return [
+		"🐳 GHCR latest tag updated!",
+		info.repositoryName ? `Repository: ${info.repositoryName}` : undefined,
+		`Package: ${info.packageName}`,
+		info.versionName ? `Version: ${info.versionName}` : undefined,
+		`Action: ${info.action}`,
+		info.actor ? `Triggered by: ${info.actor}` : undefined,
+		`Tags: ${info.tags.join(", ")}`,
+		info.url,
+	]
+		.filter((line): line is string => Boolean(line?.length))
+		.join("\n");
+};
+
+handler.on("package", async (event, env) => {
+	const pkg = event.package;
+	if (pkg.package_type !== "container") return;
+	const version = pkg.package_version;
+	const tags = extractContainerTags(version?.docker_metadata);
+	if (!tags.includes("latest")) return;
+
+	await post(
+		buildPackageNotification({
+			packageName: pkg.name,
+			repositoryName: event.repository?.full_name ?? pkg.namespace,
+			versionName: version?.name ?? version?.version,
+			action: event.action,
+			actor: version?.author?.login ?? event.sender?.login,
+			tags,
+			url: version?.html_url ?? event.repository?.html_url,
+		}),
+		env,
+	);
+});
+
+handler.on("registry_package", async (event, env) => {
+	const pkg = event.registry_package;
+	if (pkg.package_type !== "container") return;
+	const version = pkg.package_version;
+	const tags = extractContainerTags(version?.docker_metadata);
+	if (!tags.includes("latest")) return;
+
+	await post(
+		buildPackageNotification({
+			packageName: pkg.name,
+			repositoryName: event.repository?.full_name ?? pkg.namespace,
+			versionName: version?.name ?? version?.version,
+			action: event.action,
+			actor: version?.author?.login ?? event.sender?.login,
+			tags,
+			url: version?.html_url ?? event.repository?.html_url ?? pkg.html_url,
+		}),
+		env,
+	);
+});
+
 handler.on("pull_request", async (event, env) => {
 	const pr = event.pull_request;
 	let text: string;
