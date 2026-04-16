@@ -9,7 +9,7 @@
 	"dependencies": {
 		"@types/request": "2.48.13",
 		"ts-node": "10.9.2",
-		"typescript": "5.9.3"
+		"typescript": "6.0.3"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.5",
